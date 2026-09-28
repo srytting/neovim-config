@@ -1,4 +1,3 @@
--- Here we grab default Neovim capabilities and extend them with ones we want on top
 -- ▾▾▾ Setup ▾▾▾ --
 local capabilities = vim.lsp.protocol.make_client_capabilities()
 
@@ -44,7 +43,6 @@ vim.lsp.config.clangd = {
       vim.uv.cwd(),
    },
 }
-vim.lsp.enable("clangd")
 -- ^^^ C++ ^^^ --
 
 -- ▾▾▾ Markdown Oxide ▾▾▾ --
@@ -68,6 +66,10 @@ vim.lsp.enable("markdown_oxide")
 vim.lsp.config('cmake', {
    cmd = { "neocmakelsp", "stdio" },
    capabilities = capabilities,
+   init_options = {
+      lint = { enable = true },
+      format = { enable = true }
+   },
    filetypes = { 'cmake' },
    root_markers = { 'CMakeLists.txt' },
    single_file_support = true,
@@ -324,10 +326,10 @@ vim.lsp.handlers["textDocument/hover"] = function(err, result, ctx, config)
    }))
 end
 
---- Key Bindings ---
 vim.lsp.enable({
    "clangd",
    "rust_analyzer",
+   "htmlls",
    "cmake",
    "bashls",
    "jsonls",
