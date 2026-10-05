@@ -46,20 +46,20 @@ vim.lsp.config.clangd = {
 -- ^^^ C++ ^^^ --
 
 -- ▾▾▾ Markdown Oxide ▾▾▾ --
-vim.lsp.config('markdown_oxide', {
-   cmd = { "markdown-oxide" },
-   capabilities = vim.tbl_deep_extend('force', capabilities, {
-      workspace = {
-         didChangeWatchedFiles = {
-            dynamicRegistration = true,
-         },
-      },
-   }),
-   filetypes = { 'markdown' },
-   root_markers = { '.moxide.toml', '.obsidian', '.git' },
-})
-vim.lsp.enable("markdown_oxide")
--- ^^^ Markdown Oxide ^^^ --
+-- vim.lsp.config('markdown_oxide', {
+--    cmd = { "markdown-oxide" },
+--    capabilities = vim.tbl_deep_extend('force', capabilities, {
+--       workspace = {
+--          didChangeWatchedFiles = {
+--             dynamicRegistration = true,
+--          },
+--       },
+--    }),
+--    filetypes = { 'markdown' },
+--    root_markers = { '.moxide.toml', '.obsidian', '.git' },
+-- })
+-- vim.lsp.enable("markdown_oxide")
+-- -- ^^^ Markdown Oxide ^^^ --
 
 -- ▾▾▾ CMake ▾▾▾ --
 
