@@ -135,6 +135,7 @@ require("lsp")
 require('plugins')
 -- require('configs')
 require('keymaps')
+require('gitdiff').setup()
 require('autocmds')
 -- require('statusline')
 
