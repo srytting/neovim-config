@@ -9,7 +9,7 @@ local group = api.nvim_create_augroup("gitdiff.file", { clear = true })
 
 M.config = {
    show_removed = false, -- initial state; toggling makes it sticky for the session
-   word_diff = false,
+   word_diff = true,
    max_bytes = 8 * 1024 * 1024,
 }
 
@@ -88,6 +88,102 @@ local function read_worktree(abs)
    return split_lines(data)
 end
 
+local function tokens(s)
+   local toks, pos = {}, 1
+   while pos <= #s do
+      local e = select(2, s:find("^[%w_\128-\255]+", pos)) or select(2, s:find("^%s+", pos)) or pos
+      toks[#toks + 1] = { pos, e }
+      pos = e + 1
+   end
+   return toks
+end
+
+local function nonblank(s)
+   return #s - select(2, s:gsub("%s", ""))
+end
+
+-- changed byte ranges of each side, plus how alike the lines are (0..1, ignoring whitespace)
+local function word_diff(old, new)
+   if #old > 1000 or #new > 1000 then
+      return
+   end
+   local ot, nt = tokens(old), tokens(new)
+   if #ot == 0 or #nt == 0 then
+      return
+   end
+   local function join(s, t)
+      local out = {}
+      for i, r in ipairs(t) do
+         out[i] = s:sub(r[1], r[2])
+      end
+      return table.concat(out, "\n") .. "\n"
+   end
+   local w, changed = { old = {}, new = {} }, 0
+   for _, h in ipairs(vim.text.diff(join(old, ot), join(new, nt), { result_type = "indices" })) do
+      if h[2] > 0 then
+         local r = { ot[h[1]][1], ot[h[1] + h[2] - 1][2] }
+         w.old[#w.old + 1] = r
+         changed = changed + nonblank(old:sub(r[1], r[2]))
+      end
+      if h[4] > 0 then
+         local r = { nt[h[3]][1], nt[h[3] + h[4] - 1][2] }
+         w.new[#w.new + 1] = r
+         changed = changed + nonblank(new:sub(r[1], r[2]))
+      end
+   end
+   local total = nonblank(old) + nonblank(new)
+   w.sim = total == 0 and 1 or 1 - changed / total
+   return w
+end
+
+local MIN_SIM = 0.3
+local MAX_PAIR_CELLS = 400
+
+-- monotonic old->new line pairing that maximizes total similarity; returns { {i, j, w} }
+local function pair_lines(old, new)
+   local n, m, cache = #old, #new, {}
+   local function get(i, j)
+      local k = i * (m + 1) + j
+      if cache[k] == nil then
+         local w = word_diff(old[i], new[j])
+         cache[k] = (w and w.sim >= MIN_SIM) and w or false
+      end
+      return cache[k]
+   end
+   local pairs_ = {}
+   if n * m > MAX_PAIR_CELLS then
+      for k = 1, math.min(n, m) do
+         if get(k, k) then pairs_[#pairs_ + 1] = { k, k, get(k, k) } end
+      end
+      return pairs_
+   end
+   local S = {}
+   for i = 0, n do
+      S[i] = {}
+      for j = 0, m do
+         if i == 0 or j == 0 then
+            S[i][j] = 0
+         else
+            local w = get(i, j)
+            S[i][j] = math.max(S[i - 1][j], S[i][j - 1], w and S[i - 1][j - 1] + w.sim or 0)
+         end
+      end
+   end
+   local i, j = n, m
+   while i > 0 and j > 0 do
+      local w = get(i, j)
+      if w and S[i][j] == S[i - 1][j - 1] + w.sim then
+         table.insert(pairs_, 1, { i, j, w })
+         i, j = i - 1, j - 1
+      elseif S[i - 1][j] >= S[i][j - 1] then
+         i = i - 1
+      else
+         j = j - 1
+      end
+   end
+   return pairs_
+end
+
 local function compute(old, new)
    local a = #old > 0 and table.concat(old, "\n") .. "\n" or ""
    local b = #new > 0 and table.concat(new, "\n") .. "\n" or ""
@@ -102,6 +198,18 @@ local function compute(old, new)
       end
       for k = 0, cb - 1 do
          kinds[sb + k] = (h.type == "change" and k < ca) and "change" or "add"
+      end
+      if h.type == "change" and M.config.word_diff then
+         -- old_words[i]: changed ranges of h.old[i]; new_words[lnum]: changed ranges of new line lnum
+         h.old_words, h.new_words = {}, {}
+         for k = 0, cb - 1 do
+            kinds[sb + k] = "add"
+         end
+         for _, pr in ipairs(pair_lines(h.old, vim.list_slice(new, sb, sb + cb - 1))) do
+            local lnum = sb + pr[2] - 1
+            kinds[lnum] = "change"
+            h.old_words[pr[1]], h.new_words[lnum] = pr[3].old, pr[3].new
+         end
       end
       stats.added = stats.added + cb
       stats.removed = stats.removed + ca
@@ -119,58 +227,43 @@ local function compute(old, new)
    return hunks, kinds, stats
 end
 
-local function tokens(s)
-   local toks, pos = {}, 1
-   while pos <= #s do
-      local e = select(2, s:find("^[%w_\128-\255]+", pos)) or select(2, s:find("^%s+", pos)) or pos
-      toks[#toks + 1] = { pos, e }
-      pos = e + 1
-   end
-   return toks
-end
-
-local function word_diff(buf, old, new, row)
-   if not old or not new or #old > 1000 or #new > 1000 then
-      return
-   end
-   local ot, nt = tokens(old), tokens(new)
-   if #ot == 0 or #nt == 0 then
-      return
-   end
-   local function join(s, t)
-      local out = {}
-      for i, r in ipairs(t) do
-         out[i] = s:sub(r[1], r[2])
-      end
-      return table.concat(out, "\n") .. "\n"
-   end
-   for _, h in ipairs(vim.text.diff(join(old, ot), join(new, nt), { result_type = "indices" })) do
-      if h[4] > 0 then
-         local s, e = nt[h[3]][1], nt[h[3] + h[4] - 1][2]
-         api.nvim_buf_set_extmark(buf, ns, row, s - 1, { end_col = e, hl_group = "GitDiffText", priority = 20 })
-      end
-   end
-end
-
-local function expand_tabs(s, ts)
+-- col: display column s starts at; returns expanded text and the column after it
+local function expand_tabs(s, ts, col)
+   col = col or 0
    if not s:find("\t", 1, true) then
-      return s
+      return s, col + api.nvim_strwidth(s)
    end
-   local out = ""
+   local out = {}
    for seg, tab in s:gmatch("([^\t]*)(\t?)") do
-      out = out .. seg
+      out[#out + 1] = seg
+      col = col + api.nvim_strwidth(seg)
       if tab ~= "" then
-         out = out .. string.rep(" ", ts - api.nvim_strwidth(out) % ts)
+         local n = ts - col % ts
+         out[#out + 1] = string.rep(" ", n)
+         col = col + n
       end
    end
-   return out
+   return table.concat(out), col
 end
 
 local function removed_virt(h, width, ts)
    local vl = {}
-   for _, l in ipairs(h.old) do
-      local text = expand_tabs(l, ts)
-      vl[#vl + 1] = { { text .. string.rep(" ", math.max(width - api.nvim_strwidth(text), 0)), "GitDiffDeleteLine" } }
+   for i, l in ipairs(h.old) do
+      local chunks, col, pos = {}, 0, 1
+      local function add(e, hl)
+         if e < pos then return end
+         local text
+         text, col = expand_tabs(l:sub(pos, e), ts, col)
+         chunks[#chunks + 1] = { text, hl }
+         pos = e + 1
+      end
+      for _, r in ipairs(h.old_words and h.old_words[i] or {}) do
+         add(r[1] - 1, "GitDiffDeleteLine")
+         add(r[2], { "GitDiffDeleteLine", "GitDiffText" })
+      end
+      add(#l, "GitDiffDeleteLine")
+      chunks[#chunks + 1] = { string.rep(" ", math.max(width - col, 0)), "GitDiffDeleteLine" }
+      vl[i] = chunks
    end
    return vl
 end
@@ -217,9 +310,10 @@ local function decorate(buf, st)
       if h.type == "delete" then
          api.nvim_buf_set_extmark(buf, ns, h.anchor - 1, 0, { sign_text = h.above and "▔" or "▁",
             sign_hl_group = "GitDiffDeleteSign", number_hl_group = "GitDiffDeleteNr", priority = 10 })
-      elseif h.type == "change" and M.config.word_diff then
-         for k = 0, math.min(h.removed, h.added) - 1 do
-            word_diff(buf, h.old[k + 1], d.lines[h.start + k], h.start + k - 1)
+      end
+      for lnum, ranges in pairs(h.new_words or {}) do
+         for _, r in ipairs(ranges) do
+            api.nvim_buf_set_extmark(buf, ns, lnum - 1, r[1] - 1, { end_col = r[2], hl_group = "GitDiffText", priority = 20 })
          end
       end
    end

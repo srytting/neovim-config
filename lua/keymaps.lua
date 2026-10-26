@@ -24,7 +24,17 @@ vim.keymap.set("n", "<leader>C", function()
    })
 end)
 vim.keymap.set("n", "<leader>gs", '<cmd>FzfLua git_status<CR>')
-vim.keymap.set("n", "<leader>gd", '<cmd>GitDiff<CR>')
+vim.keymap.set("n", "<leader>gdh", '<cmd>GitDiff<CR>')
+vim.keymap.set("n", "<leader>gdd", function()
+   -- diff against the most recently committed-to origin/develop/* branch
+   local res = vim.system({ "git", "for-each-ref", "--sort=-committerdate", "--count=1",
+      "--format=%(refname:short)", "refs/remotes/origin/develop/" }, { text = true }):wait()
+   local ref = vim.trim(res.stdout or "")
+   if res.code ~= 0 or ref == "" then
+      return vim.notify("gitdiff: no origin/develop/* branch found", vim.log.levels.ERROR)
+   end
+   vim.cmd.GitDiff(ref)
+end)
 vim.keymap.set("n", "<leader>gb", '<cmd>FzfLua git_bcommits<CR>')
 vim.keymap.set("n", "<leader>.", '<cmd>FzfLua resume<CR>')
 vim.keymap.set("n", "<leader>*", '<cmd>FzfLua grep_cword<CR>')
